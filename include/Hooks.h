@@ -9,7 +9,7 @@ namespace Hooks
     class CheckShouldEquip
     {
     public:
-        static void Install(REL::VariantID a_vtable_id)
+        static void Install(REL::ID a_vtable_id)
         {
             logger::info("Installing Check Equip: {} hook", typeid(T).name());
 
@@ -24,17 +24,17 @@ namespace Hooks
         {
             auto result = func(a_this, a_controller);
 
-
-            if (result && a_this->IsValid()) {
+            if (result && a_controller && a_this->IsValid() && a_this->item) {
                 const auto attacker = a_controller->handleCount ? a_controller->cachedAttacker : a_controller->attackerHandle.get();
-                if (attacker && !attacker->IsPlayer() && attacker->HasKeywordString("ActorTypeDragon"sv)) {
+                auto*      formLoader = FormLoader::GetSingleton();
+                if (attacker && !attacker->IsPlayer() && formLoader->IsDragon(attacker.get())) {
                     logger::debug("-----------------------");
                     logger::debug("Check equip {}", attacker->GetName());
                     auto shout = a_this->item->As<RE::TESShout>();
 
                     auto variationSpell01 = shout ? shout->variations[0].spell : nullptr;
 
-                    if (variationSpell01 && variationSpell01->HasKeyword(FormLoader::GetSingleton()->noShoutKeyword)) {
+                    if (variationSpell01 && formLoader->noShoutKeyword && variationSpell01->HasKeyword(formLoader->noShoutKeyword)) {
                         return false;
                     }
 
@@ -56,73 +56,49 @@ namespace Hooks
         static void Install()
         {
             logger::info("Installing Actor update");
-            REL::Relocation<std::uintptr_t> actorUpdate{ REL::RelocationID(36357, 37348), REL::Relocate(0x6D3, 0x674) };
+            // The call site moved in 1.7.x (verified against the 1.7.104 exe: call at +0x683, was +0x674 on 1.6.x)
+            const auto callOffset = REX::FModule::GetExecutingModule().GetFileVersion() >= SKSE::RUNTIME_SSE_1_7_99 ? 0x683 : 0x674;
+            REL::Relocation<std::uintptr_t> actorUpdate{ REL::ID(37348), callOffset };
 
-            auto& trampoline = SKSE::GetTrampoline();
+            auto& trampoline = REL::GetTrampoline();
             _Update          = trampoline.write_call<5>(actorUpdate.address(), Update);
             logger::info("Hook installed");
-        }
-
-        static std::string intToHexString(int value)
-        {
-            std::stringstream stream;
-            stream << std::hex << value; // Convert integer to hexadecimal string
-            return stream.str();         // Return the string representation
         }
 
     private:
         static void Update(RE::Actor* a_actor, float a_zPos, RE::TESObjectCELL* a_cell)
         {
-            if (a_actor && !a_actor->IsPlayer() && a_actor->HasKeywordString("ActorTypeDragon"sv)) {
+            auto* formLoader = FormLoader::GetSingleton();
+
+            // Update runs on the main thread and is not re-entrant, so no guard flag is needed
+            if (a_actor && formLoader->xMarker && !a_actor->IsPlayer() && formLoader->IsDragon(a_actor)) {
                 logger::debug("-----------------------");
                 logger::debug("Actor update {}", a_actor->GetName());
 
-                auto* formLoader = FormLoader::GetSingleton();
+                const auto combatTarget = a_actor->currentCombatTarget.get();
 
-                bool expected = false;
-                if (formLoader->isRunning.compare_exchange_strong(expected, true)) {
-                    auto combatTarget = a_actor->GetActorRuntimeData().currentCombatTarget;
+                if (combatTarget) {
+                    logger::debug("Combat target: {}", combatTarget->GetName());
 
-                    if (combatTarget) {
-                        logger::debug("Combat target: {}", combatTarget.get()->GetName());
+                    if (const auto process = a_actor->currentProcess) {
+                        if (const auto package = process->currentPackage.package) {
+                            logger::debug("Current package {:X}", package->GetFormID());
+                        }
 
-                        if (const auto process = a_actor->GetActorRuntimeData().currentProcess) {
-                            auto currentPackage = process->currentPackage.data;
-
-                            auto package = process->currentPackage.package;
-                            if (package) {
-                                logger::debug("Current package {}", intToHexString(package->GetFormID()));
+                        const auto packageTarget = process->currentPackage.target.get();
+                        if (packageTarget && packageTarget->GetFormID() == a_actor->GetFormID()) {
+                            logger::debug("Package target was self, not swapping");
+                        }
+                        else {
+                            if (packageTarget) {
+                                logger::debug("Package target was {}", packageTarget->GetName());
                             }
-
-                            if (process->currentPackage.target && process->currentPackage.target.get()->GetFormID() == a_actor->GetFormID()) {
-                                logger::debug("Package target was self, not swapping");
-                            }
-                            else {
-                                if (process->currentPackage.target) {
-                                    logger::debug("Package target was {}", process->currentPackage.target.get()->GetName());
-                                }
-
-                                auto xMarker = formLoader->xMarker;
-
-                                if (xMarker) {
-                                    auto targetActorPtr = combatTarget.get();
-                                    if (targetActorPtr != nullptr) {
-                                        auto targetActor = targetActorPtr.get();
-                                        if (targetActor) {
-                                            xMarker->MoveTo(targetActor);
-                                        }
-                                    }
-                                }
-                            }
+                            formLoader->xMarker->MoveTo(combatTarget.get());
                         }
                     }
-                    else {
-                        logger::debug("No Combat target");
-                    }
-                    formLoader->isRunning = false;
                 }
                 else {
-                    logger::debug("Xmarker movement already in progress. Skipping");
+                    logger::debug("No Combat target");
                 }
             }
 
@@ -132,7 +108,7 @@ namespace Hooks
         inline static REL::Relocation<decltype(Update)> _Update;
     };
 
-    void Install()
+    inline void Install()
     {
         CheckShouldEquip<RE::CombatMagicCasterTargetEffect>::Install(RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemShout_CombatMagicCasterTargetEffect_[0]);
         CheckShouldEquip<RE::CombatInventoryItemShout>::Install(RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemShout_CombatMagicCasterOffensive_[0]);
@@ -148,7 +124,6 @@ namespace Hooks
         CheckShouldEquip<RE::CombatMagicCasterInvisibility>::Install(RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemShout_CombatMagicCasterInvisibility_[0]);
         CheckShouldEquip<RE::CombatMagicCasterLight>::Install(RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemShout_CombatMagicCasterLight_[0]);
         CheckShouldEquip<RE::CombatMagicCasterParalyze>::Install(RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemShout_CombatMagicCasterParalyze_[0]);
-        CheckShouldEquip<RE::CombatMagicCasterWard>::Install(RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemShout_CombatMagicCasterWard_[0]);
 
         logger::info("\t\tInstalled magic caster vtable hooks"sv);
 

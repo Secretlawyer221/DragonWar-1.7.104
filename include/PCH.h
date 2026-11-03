@@ -148,6 +148,7 @@
 #include <Windows.h>
 // clang-format on
 
+#include <spdlog/spdlog.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/msvc_sink.h>
 
@@ -169,9 +170,7 @@
 #include "Version.h"
 
 using namespace std::literals;
-using namespace REL::literals;
-
-namespace logger = SKSE::log;
+namespace logger = spdlog;
 
 template <typename T>
 class Singleton
@@ -263,20 +262,17 @@ public:
             logger::info("Registered {} handler", name);
             return;
         }
-        const auto plugin{ SKSE::PluginDeclaration::GetSingleton() };
-        SKSE::stl::report_and_fail(fmt::format("{}: Failed to register {} handler", plugin->GetName(), name));
+        REX::FAIL("{}: Failed to register {} handler", SKSE::GetPluginName(), name);
     }
 };
 
 namespace stl
 {
-    using namespace SKSE::stl;
 
     template <typename T>
     constexpr auto write_thunk_call() noexcept
     {
-        SKSE::AllocTrampoline(14);
-        auto& trampoline{ SKSE::GetTrampoline() };
+        auto& trampoline{ REL::GetTrampoline() };
         T::func = trampoline.write_call<5>(T::address, T::Thunk);
     }
 
