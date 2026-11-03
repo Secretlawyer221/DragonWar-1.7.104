@@ -5,11 +5,18 @@
   "dependencies": [
     "directxtk",
     "fmt",
-    "spdlog",
+    {
+      "name": "spdlog",
+      "features": [ "wchar" ]
+    },
     "rapidcsv",
     "simpleini",
     "xbyak",
-    "clib-util"
+    "clib-util",
+    {
+      "name": "commonlib-shared",
+      "features": [ "xbyak" ]
+    }
   ],
   "license": "GPL-3.0-or-later",
   "vcpkg-configuration": {

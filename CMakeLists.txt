@@ -3,19 +3,18 @@ message("Using toolchain file ${CMAKE_TOOLCHAIN_FILE}.")
 
 project(
   DragonWar
-  VERSION 1.0.1
+  VERSION 1.0.2
   LANGUAGES CXX
 )
 
-# Enable for 1130 changes
-set(ENABLE_SKYRIMAE1130 ON)
+# Build for Skyrim AE (up to 1.7.104)
+set(SKYRIM_SUPPORT_AE ON CACHE BOOL "" FORCE)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
 set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_DEBUG OFF)
 set(CMAKE_OPTIMIZE_DEPENDENCIES ON)
-set(SKSE_SUPPORT_XBYAK ON)
 
 include(GNUInstallDirs)
 
@@ -59,13 +58,27 @@ source_group(
 )
 
 set(BUILD_TESTS OFF)
-add_subdirectory(extern/CommonLibSSE-NG)
-include(extern/CommonLibSSE-NG/cmake/CommonLibSSE.cmake)
+add_subdirectory(extern/CommonLibSSE)
 
-add_commonlibsse_plugin(
+add_library(
   ${PROJECT_NAME}
-  AUTHOR colinswrath
-  SOURCES ${headers} ${sources}
+  SHARED
+  ${headers}
+  ${sources}
+)
+
+target_compile_definitions(
+  ${PROJECT_NAME}
+  PRIVATE
+  SKYRIM_SUPPORT_AE=1
+  WIN32_LEAN_AND_MEAN
+  NOMINMAX
+)
+
+target_link_libraries(
+  ${PROJECT_NAME}
+  PRIVATE
+  CommonLibSSE::CommonLibSSE
 )
 
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
@@ -114,10 +127,7 @@ else()
   set(BUILD_NAME Release)
 endif()
 
-if(ENABLE_SKYRIMAE1130)
-  message("\tBuilding 1130")
-  set(BUILD_NAME ${BUILD_NAME}1130)
-endif()
+set(BUILD_NAME ${BUILD_NAME}AE)
 
 add_custom_command(
   TARGET ${PROJECT_NAME}

@@ -19,14 +19,14 @@ namespace Events
         if (a_event->newState != RE::ACTOR_COMBAT_STATE::kCombat)
             return RE::BSEventNotifyControl::kContinue;
 
-        if (const auto actor = a_event->actor->As<RE::Actor>()) {
-            if (actor->HasKeywordString("ActorTypeDragon"sv)) {
-                if (!actor->HasKeywordString("DW_ActorTypeDragonCSExclude"sv)) {
-                    if (a_event->targetActor && a_event->targetActor->IsPlayerRef()) {
-                        SetRandomCombatStyles(actor);       
-                    }
-                }
-            }
+        // Cheapest checks first: only care about combat against the player
+        if (!a_event->targetActor->IsPlayerRef()) {
+            return RE::BSEventNotifyControl::kContinue;
+        }
+
+        const auto actor = a_event->actor->As<RE::Actor>();
+        if (actor && FormLoader::GetSingleton()->IsDragon(actor) && !actor->HasKeywordString("DW_ActorTypeDragonCSExclude"sv)) {
+            SetRandomCombatStyles(actor);
         }
 
         return RE::BSEventNotifyControl::kContinue;
@@ -35,34 +35,39 @@ namespace Events
     void OnCombatEventHandler::SetRandomCombatStyles(RE::Actor* actor) {
 
         auto settings = Settings::GetSingleton();
-        auto stylePool = FormLoader::GetSingleton()->combatStylePool;
+        const auto& stylePool = FormLoader::GetSingleton()->combatStylePool;
+        if (stylePool.empty() || !actor->combatController) {
+            return;
+        }
         const auto override = settings->OverrideSliders;
         logger::debug("\tini override: {}", override);
 
+        if (settings->currentStyleIndex < 0 || static_cast<std::size_t>(settings->currentStyleIndex) >= stylePool.size()) {
+            settings->currentStyleIndex = 0;
+        }
         logger::debug("\tStyle Index {}", settings->currentStyleIndex);
         auto* chosenStyle = stylePool[settings->currentStyleIndex];
 
-        if (settings->currentStyleIndex == stylePool.size() - 1) {
-            settings->currentStyleIndex = 0;
-        }
-        else {
-            settings->currentStyleIndex = settings->currentStyleIndex + 1;
-        }
+        settings->currentStyleIndex = (settings->currentStyleIndex + 1) % static_cast<std::int32_t>(stylePool.size());
 
         //Randomize the style and then add it to the dragon
 
-        std::random_device rd;
+        // One engine, seeded once, instead of constructing a std::random_device per value
+        static std::mt19937 rng{ std::random_device{}() };
+        const auto roll = [](float a_min, float a_max) {
+            return a_min < a_max ? std::uniform_real_distribution<float>(a_min, a_max)(rng) : a_min;
+        };
 
-        const auto dive_bomb_chance     = override ? settings->fDiveBombChance : clib_util::RNG(rd()).Generate<float>(settings->fDiveBombChanceMin, settings->fDiveBombChanceMax);
-        const auto flying_attack_chance = override ? settings->fFlyingAttackChance : clib_util::RNG(rd()).Generate<float>(settings->fFlyingAttackChanceMin, settings->fFlyingAttackChanceMax);
-        const auto ground_attack_chance = override ? settings->fGroundAttackChance : clib_util::RNG(rd()).Generate<float>(settings->fGroundAttackChanceMin, settings->fGroundAttackChanceMax);
-        const auto ground_attack_mult   = override ? settings->fGroundAttackMult : clib_util::RNG(rd()).Generate<float>(settings->fGroundAttackMultMin, settings->fGroundAttackMultMax);
-        const auto hover_chance         = override ? settings->fHoverChance : clib_util::RNG(rd()).Generate<float>(settings->fHoverChanceMin, settings->fHoverChanceMax);
-        const auto hover_mult           = override ? settings->fHoverMult : clib_util::RNG(rd()).Generate<float>(settings->fHoverMultMin, settings->fHoverMultMax);
-        const auto perch_attack_chance  = override ? settings->fPerchAttackChance : clib_util::RNG(rd()).Generate<float>(settings->fPerchAttackChanceMin, settings->fPerchAttackChanceMax);
-        const auto perch_attack_mult    = override ? settings->fPerchAttackMult : clib_util::RNG(rd()).Generate<float>(settings->fPerchAttackMultMin, settings->fPerchAttackMultMax);
-        const auto equip_unarmed_mult   = override ? settings->fEquipUnarmedMult : clib_util::RNG(rd()).Generate<float>(settings->fEquipUnarmedMultMin, settings->fEquipUnarmedMultMax);
-        const auto equip_shout_mult     = override ? settings->fEquipShoutMult : clib_util::RNG(rd()).Generate<float>(settings->fEquipShoutMultMin, settings->fEquipShoutMultMax);
+        const auto dive_bomb_chance     = override ? settings->fDiveBombChance : roll(settings->fDiveBombChanceMin, settings->fDiveBombChanceMax);
+        const auto flying_attack_chance = override ? settings->fFlyingAttackChance : roll(settings->fFlyingAttackChanceMin, settings->fFlyingAttackChanceMax);
+        const auto ground_attack_chance = override ? settings->fGroundAttackChance : roll(settings->fGroundAttackChanceMin, settings->fGroundAttackChanceMax);
+        const auto ground_attack_mult   = override ? settings->fGroundAttackMult : roll(settings->fGroundAttackMultMin, settings->fGroundAttackMultMax);
+        const auto hover_chance         = override ? settings->fHoverChance : roll(settings->fHoverChanceMin, settings->fHoverChanceMax);
+        const auto hover_mult           = override ? settings->fHoverMult : roll(settings->fHoverMultMin, settings->fHoverMultMax);
+        const auto perch_attack_chance  = override ? settings->fPerchAttackChance : roll(settings->fPerchAttackChanceMin, settings->fPerchAttackChanceMax);
+        const auto perch_attack_mult    = override ? settings->fPerchAttackMult : roll(settings->fPerchAttackMultMin, settings->fPerchAttackMultMax);
+        const auto equip_unarmed_mult   = override ? settings->fEquipUnarmedMult : roll(settings->fEquipUnarmedMultMin, settings->fEquipUnarmedMultMax);
+        const auto equip_shout_mult     = override ? settings->fEquipShoutMult : roll(settings->fEquipShoutMultMin, settings->fEquipShoutMultMax);
 
         chosenStyle->flightData.diveBombChance = dive_bomb_chance;
         logger::debug("\tSet dive bomb chance to {}", dive_bomb_chance);
@@ -85,10 +90,13 @@ namespace Events
         chosenStyle->generalData.shoutScoreMult = equip_shout_mult;
         logger::debug("\tSet shout score mult to {}", equip_shout_mult);
 
-        logger::debug("\tCombat style before: {}", std::to_string(actor->GetActorRuntimeData().combatController->combatStyle->GetFormID()));
+        // Arguments are evaluated even when debug logging is off, so only touch combatStyle if it is non-null
+        if (const auto before = actor->combatController->combatStyle) {
+            logger::debug("\tCombat style before: {:X}", before->GetFormID());
+        }
 
-        actor->GetActorRuntimeData().combatController->combatStyle = chosenStyle;
-        logger::debug("\tCombat style after: {}", std::to_string(actor->GetActorRuntimeData().combatController->combatStyle->GetFormID()));
+        actor->combatController->combatStyle = chosenStyle;
+        logger::debug("\tCombat style after: {:X}", chosenStyle->GetFormID());
 
         logger::debug("\tRandomized {}'s flight data and equip sliders", actor->GetName());
     }

@@ -1,3 +1,5 @@
+#pragma once
+
 class Settings
 {
 public:
@@ -49,13 +51,18 @@ public:
 
         CSimpleIniA ini;
         ini.SetUnicode();
-        ini.LoadFile(R"(.\Data\SKSE\Plugins\DragonWar.ini)");
+        if (ini.LoadFile(R"(.\Data\SKSE\Plugins\DragonWar.ini)") < 0) {
+            logger::warn("Could not load DragonWar.ini, using defaults");
+        }
 
         OverrideSliders     = ini.GetBoolValue("", "bOverrideCombatStyleSliders", false);
         DebugLogs           = ini.GetBoolValue("", "bDebugLogs", false);
         logger::info("\tDebug log: {}", DebugLogs);
         if (DebugLogs) {
-            spdlog::get("Global")->set_level(spdlog::level::level_enum::debug);
+            if (const auto log = spdlog::default_logger()) {
+                log->set_level(spdlog::level::level_enum::debug);
+                log->flush_on(spdlog::level::level_enum::debug);
+            }
             logger::debug("Debug logging enabled");
         }
 
@@ -90,6 +97,27 @@ public:
         fEquipShoutMultMin     = static_cast<float>(ini.GetDoubleValue("", "fEquipShoutMultMin", 0.0f));
         fEquipShoutMultMax     = static_cast<float>(ini.GetDoubleValue("", "fEquipShoutMultMax", 10.0f));
         currentStyleIndex      = 0;
+
+        // Guard against Min > Max, which is undefined behaviour for uniform_real_distribution
+        FixRange(fDiveBombChanceMin, fDiveBombChanceMax);
+        FixRange(fFlyingAttackChanceMin, fFlyingAttackChanceMax);
+        FixRange(fGroundAttackChanceMin, fGroundAttackChanceMax);
+        FixRange(fGroundAttackMultMin, fGroundAttackMultMax);
+        FixRange(fHoverChanceMin, fHoverChanceMax);
+        FixRange(fHoverMultMin, fHoverMultMax);
+        FixRange(fPerchAttackChanceMin, fPerchAttackChanceMax);
+        FixRange(fPerchAttackMultMin, fPerchAttackMultMax);
+        FixRange(fEquipUnarmedMultMin, fEquipUnarmedMultMax);
+        FixRange(fEquipShoutMultMin, fEquipShoutMultMax);
+    }
+
+private:
+    static void FixRange(float& a_min, float& a_max)
+    {
+        if (a_min > a_max) {
+            logger::warn("Min ({}) is greater than Max ({}) in DragonWar.ini, swapping", a_min, a_max);
+            std::swap(a_min, a_max);
+        }
     }
 
 };
